@@ -1,0 +1,189 @@
+---
+title: "Exercise 4"
+format: html
+---
+
+## Exercise 4
+```{r}
+# Define function
+testfun <- function(sometext){
+  print(sometext)
+}
+
+class(testfun)
+
+now <- Sys.time()
+my_age <- function(birthday, unit = "days"){
+  difftime(now, birthday, units = unit)
+}
+
+my_age("1987-11-30", unit = "hours")
+```
+
+## Task 1: Write your own functions
+```{r}
+# Load libraries
+library("tidyverse")
+library("readr")
+library("sf")
+library("lubridate") 
+library("ggplot2") 
+
+# Import data
+wildschwein_BE <- read_delim("data/wildschwein_BE_2056.csv", delim = ",")
+
+wildschwein_BE
+
+
+# Create function calculating eucledean distance
+euclid <- function(x, y){
+  steplength <- sqrt((x-lead(x))^2 +(y-lead(y))^2)
+  return(steplength)
+}
+
+mysteplength <- euclid(x = c(0, 1), y = c(0, 1))
+
+wildschwein_BE |> 
+  mutate(
+    steplength = euclid(E, N)
+  )
+```
+
+## Task 2: Prepare Analysis
+```{r}
+# Filter individuals Rosa and Sabi for the timespan 01.4.2015 - 15.4.2015
+wildboar2 <- wildschwein_BE |> 
+  filter(TierName %in% c("Rosa", "Sabi")) |> 
+  filter(DatetimeUTC >= as.POSIXct("2015-04-01 00:00:00", tz = "UTC")) |> 
+  filter(DatetimeUTC <= as.POSIXct("2015-04-14 23:59:59", tz = "UTC"))
+
+# Vizualize data with a plot
+wildboar2 |> 
+  ggplot(aes(E, N, color = TierName))+
+  geom_point(alpha = .2)+
+  coord_equal()
+
+```
+
+## Task 3: Create Join Key
+```{r}
+# Create identical time stamps and store values in new column. This will serve as a join key
+wildboar3 <- wildboar2 |> 
+  select(-TierID, -CollarID) |> 
+  mutate(
+    Datetime_round = lubridate::round_date(DatetimeUTC,"15 minutes")
+  )
+
+```
+
+## Task 4: Measuring distance at concurrent locations
+```{r}
+# Split the data into one data.frame per animal
+sabi <- wildboar3 |> 
+  filter(TierName == "Sabi")
+
+rosa <- wildboar3 |> 
+  filter(TierName == "Rosa")
+
+# Join the two data sets 
+rosa_sabi <- dplyr::inner_join(sabi, rosa, "Datetime_round", suffix = c("_sabi", "_rosa"))
+
+# Calculate eucledian distances between concurrent observations and store values in new column
+euclid2 <- function(x, y, x2, y2){
+  steplength <- sqrt((x-x2)^2 +(y-y2)^2)
+  return(steplength)
+}
+
+# Use threshold distance to determine where the two individuals meet
+rosa_sabi <- rosa_sabi |> 
+  mutate(
+    distance = euclid2(E_rosa, N_rosa, E_sabi, N_sabi),
+    meet = distance < 100
+  ) |> 
+  filter(meet)
+    
+```
+
+## Task 5: Visualize data
+```{r}
+# Use individual dataframes from Rosa and Sabi, add the joined dataset filtered where they meet
+ggplot(rosa_sabi)+
+  geom_point(data = sabi, aes(E, N, color = "sabi"), shape = 16, alpha = .3)+
+  geom_point(data = rosa, aes(E, N, color = "rosa"), shape = 16, alpha = .3)+
+  geom_point(aes(x = E_rosa, N_rosa, fill = "rosa"), shape = 21)+
+  geom_point(aes(x = E_sabi, N_sabi, fill = "sabi"), shape = 21)+
+  labs(color = "Regular Locations", fill = "Meets")+
+  coord_equal()+
+  theme_minimal()
+```
+
+# Task 7: Find “Meet Patterns” in your own tracking data
+```{r}
+# 1. Import data and prepare it like last week:
+# Import Posmo data
+posmo <- read_delim("data/posmo_data.csv", delim = ",")
+
+# Keep only the necessary columns
+posmo <- select(posmo, datetime, lon_x, lat_y)
+
+# Transform data to EPSG 2056 coordinate system
+posmo <- st_as_sf(posmo, coords = c("lon_x","lat_y"), crs = 4326) |>
+  st_transform(2056)
+
+# store the coordinates into two separate columns
+posmo_coordinates <- st_coordinates(posmo)
+
+posmo <- cbind(posmo, posmo_coordinates)
+
+posmo <- as.data.frame(posmo)
+
+# 2. Create a new column hour as a decimal hour
+posmo <- posmo |> mutate(
+  hour = hour(datetime) + minute(datetime)/60 + second(datetime)/3600
+)
+
+# 3. Round value of newly created "hour" column to nearest 15 minutes
+posmo <- posmo |> mutate(
+  hour_round = round(hour/0.25)*0.25
+)
+
+# 4 Create two data frames, each containing tracking of one day
+posmo_day1 <- posmo |> 
+  filter(as.Date(datetime) == "2023-05-06") 
+
+posmo_day2 <- posmo |> 
+  filter(as.Date(datetime) == "2023-05-07")
+
+# 5 Join the two data.frames by hour_round
+posmo_join <- dplyr::inner_join(posmo_day1, posmo_day2, by = "hour_round", suffix = c("_day1", "_day2"))
+
+# 6 Calculate distances at concurrent locations and filter your data to locations that are spatially close
+
+# Calculate eucledian distances between concurrent observations and store values in new column
+euclid3 <- function(x, y, x2, y2){
+  steplength <- sqrt((x-x2)^2 +(y-y2)^2)
+  return(steplength)
+}
+
+# Use threshold distance to determine where the two individuals meet
+posmo_join <- posmo_join |> 
+  mutate(
+    distance = euclid3(X_day1, Y_day1, X_day2, Y_day2),
+    meet = distance < 100
+  ) 
+
+# Filter meet locations
+posmo_meet <- posmo_join |> 
+  filter(meet)
+
+# Vizualize with a Plot. Use individual dataframes from Day1 and Day2, add the joined dataset filtered where they meet
+ggplot(posmo_meet)+
+  geom_point(data = posmo_day1, aes(X, Y, color = "day1"), shape = 16, alpha = .3)+
+  geom_point(data = posmo_day2, aes(X, Y, color = "day2"), shape = 16, alpha = .3)+
+  geom_point(aes(x = X_day1, Y_day1, fill = "day1"), shape = 21)+
+  geom_point(aes(x = X_day2, Y_day2, fill = "day2"), shape = 21)+
+  labs(color = "Regular Locations", fill = "Meets")+
+  coord_equal()+
+  theme_minimal()
+```
+
